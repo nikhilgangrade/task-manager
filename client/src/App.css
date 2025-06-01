@@ -1,0 +1,159 @@
+body {
+  font-family: Arial, sans-serif;
+}
+
+.task-item {
+  padding: 8px;
+  border-bottom: 1px solid #ddd;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-view {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex-grow: 1;
+}
+
+.task-title {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.task-priority-label {
+  background-color: #eee;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.85rem;
+  color: #555;
+  min-width: 80px;
+  text-align: center;
+}
+
+.task-description-label {
+  font-size: 0.85rem;
+  color: #666;
+  max-width: 250px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.task-buttons button {
+  padding: 4px 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border: 1px solid #ccc;
+  background-color: white;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+}
+
+.task-buttons button:hover {
+  background-color: #f0f0f0;
+}
+
+.task-edit-form {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex-grow: 1;
+}
+
+.task-title-input {
+  flex-grow: 1;
+  padding: 6px 10px;
+  font-size: 1rem;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+}
+
+.task-priority-select {
+  width: 130px;
+  padding: 6px 10px;
+  font-size: 0.9rem;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  background-color: white;
+  cursor: pointer;
+}
+
+.task-description-input {
+  flex-grow: 1;
+  max-width: 250px;
+  padding: 6px 10px;
+  font-size: 0.9rem;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+}
+
+button.action {
+  padding: 8px 16px;
+  font-size: 1rem;
+  margin-top: 12px;
+  cursor: pointer;
+  border: none;
+  background-color: #007bff;
+  color: white;
+  border-radius: 6px;
+  transition: background-color 0.3s ease;
+}
+
+button.action:hover {
+  background-color: #0056b3;
+}
+
+button.save {
+  background-color: #28a745;
+  color: white;
+  border: none;
+  border-radius: 4px;
+}
+
+button.save:hover {
+  background-color: #218838;
+}
+
+button.cancel {
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 4px;
+}
+
+button.cancel:hover {
+  background-color: #c82333;
+}
+
+button.edit {
+  background-color: #ffc107;
+  border: none;
+  border-radius: 4px;
+  color: #212529;
+}
+
+button.edit:hover {
+  background-color: #e0a800;
+}
+
+button.delete {
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 4px;
+}
+
+button.delete:hover {
+  background-color: #c82333;
+}
