@@ -1,5 +1,4 @@
-// App.js
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import io from 'socket.io-client';
 import axios from 'axios';
 import './App.css';
@@ -19,6 +18,7 @@ function App() {
   const [editDescription, setEditDescription] = useState('');
   const [history, setHistory] = useState([]);
   const [future, setFuture] = useState([]);
+  const suppressSocket = useRef(false);
 
   useEffect(() => {
     axios.get('http://localhost:4000/api/projects').then(res => setProjects(res.data));
@@ -31,10 +31,18 @@ function App() {
     socket.emit('join', activeProject);
 
     const onUpdate = task => {
+      if (suppressSocket.current) {
+        suppressSocket.current = false;
+        return;
+      }
       setTasks(prev => prev.map(t => (t.id === task.id ? task : t)));
     };
 
     const onCreate = task => {
+      if (suppressSocket.current) {
+        suppressSocket.current = false;
+        return;
+      }
       if (task.project_id === activeProject) {
         setTasks(prev => [...prev, task]);
         setHistory(prev => [...prev, { type: 'create', task }]);
@@ -42,6 +50,10 @@ function App() {
     };
 
     const onDelete = id => {
+      if (suppressSocket.current) {
+        suppressSocket.current = false;
+        return;
+      }
       setTasks(prev => prev.filter(t => t.id !== id));
     };
 
@@ -95,22 +107,27 @@ function App() {
       configuration: { priority: '', description: '' },
     });
     const task = res.data;
+    suppressSocket.current = true;
+    setTasks(prev => [...prev, task]);
     socket.emit('task:create', task);
+    setHistory(prev => [...prev, { type: 'create', task }]);
   };
 
   const deleteTask = async task => {
     try {
+      const latest = tasks.find(t => t.id === task.id);
+      const snapshot = JSON.parse(JSON.stringify(latest));
+
       setTasks(prev => prev.filter(t => t.id !== task.id));
-      setHistory(prev => [...prev, { type: 'delete', task }]);
+      setHistory(prev => [...prev, { type: 'delete', task: snapshot }]);
 
       await axios.delete(`http://localhost:4000/api/tasks/${task.id}`);
-
+      suppressSocket.current = true;
       socket.emit('task:delete', { id: task.id, project_id: activeProject });
     } catch (err) {
       console.error('Error deleting task:', err);
     }
   };
-
 
   const startEditing = task => {
     setEditingTask(task);
@@ -121,16 +138,20 @@ function App() {
 
   const saveEdit = async () => {
     const updated = {
-      ...editingTask,
+      id: editingTask.id,
+      project_id: activeProject,
       title: editTitle,
       configuration: {
         priority: editPriority,
         description: editDescription,
       },
     };
+
     await axios.put(`http://localhost:4000/api/tasks/${editingTask.id}`, updated);
+    suppressSocket.current = true;
     socket.emit('task:update', updated);
     setHistory(prev => [...prev, { type: 'update', before: editingTask, after: updated }]);
+    setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)));
     setEditingTask(null);
   };
 
@@ -140,20 +161,25 @@ function App() {
     setHistory([...history]);
     setFuture([last, ...future]);
 
-    if (last.type === 'create') {
-      axios.delete(`http://localhost:4000/api/tasks/${last.task.id}`);
-      socket.emit('task:delete', { id: last.task.id, project_id: activeProject });
-    } else if (last.type === 'delete') {
-      axios.post(`http://localhost:4000/api/projects/${activeProject}/tasks`, last.task).then(res => {
-        socket.emit('task:create', res.data);
-      });
-    } else if (last.type === 'update') {
-      const { before } = last;
-      axios.put(`http://localhost:4000/api/tasks/${before.id}`, {
-        title: before.title,
-        configuration: before.configuration || {},
-      });
-      socket.emit('task:update', before);
+    suppressSocket.current = true;
+    switch (last.type) {
+      case 'create':
+        setTasks(prev => prev.filter(t => t.id !== last.task.id));
+        socket.emit('task:delete', { id: last.task.id, project_id: last.task.project_id });
+        break;
+      case 'delete': {
+        const { id, project_id, title, configuration } = last.task;
+        const restored = { id, project_id, title, configuration };
+        setTasks(prev => [...prev, restored]);
+        socket.emit('task:create', restored);
+        break;
+      }
+      case 'update':
+        setTasks(prev => prev.map(t => (t.id === last.before.id ? last.before : t)));
+        socket.emit('task:update', last.before);
+        break;
+      default:
+        console.warn('Unknown action type:', last.type);
     }
   };
 
@@ -161,22 +187,27 @@ function App() {
     const next = future.shift();
     if (!next) return;
     setFuture([...future]);
-    setHistory([...history, next]);
+    setHistory(prev => [...prev, next]);
 
-    if (next.type === 'create') {
-      axios.post(`http://localhost:4000/api/projects/${activeProject}/tasks`, { title: next.task.title }).then(res => {
-        socket.emit('task:create', res.data);
-      });
-    } else if (next.type === 'delete') {
-      axios.delete(`http://localhost:4000/api/tasks/${next.task.id}`);
-      socket.emit('task:delete', { id: next.task.id, project_id: activeProject });
-    } else if (next.type === 'update') {
-      const { after } = next;
-      axios.put(`http://localhost:4000/api/tasks/${after.id}`, {
-        title: after.title,
-        configuration: after.configuration || {},
-      });
-      socket.emit('task:update', after);
+    suppressSocket.current = true;
+    switch (next.type) {
+      case 'create': {
+        const { id, project_id, title, configuration } = next.task;
+        const recreated = { id, project_id, title, configuration };
+        setTasks(prev => [...prev, recreated]);
+        socket.emit('task:create', recreated);
+        break;
+      }
+      case 'delete':
+        setTasks(prev => prev.filter(t => t.id !== next.task.id));
+        socket.emit('task:delete', { id: next.task.id, project_id: next.task.project_id });
+        break;
+      case 'update':
+        setTasks(prev => prev.map(t => (t.id === next.after.id ? next.after : t)));
+        socket.emit('task:update', next.after);
+        break;
+      default:
+        console.warn('Unknown action type:', next.type);
     }
   };
 
