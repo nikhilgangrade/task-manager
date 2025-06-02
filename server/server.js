@@ -14,7 +14,10 @@ app.use(express.json());
 
 // Get all projects
 app.get('/api/projects', (req, res) => {
-  db.all('SELECT * FROM projects', (err, rows) => res.json(rows));
+  db.all('SELECT * FROM projects', (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
 });
 
 // Create new project
@@ -22,6 +25,7 @@ app.post('/api/projects', (req, res) => {
   const id = uuidv4();
   const { description } = req.body;
   db.run('INSERT INTO projects (id, description) VALUES (?, ?)', [id, description], err => {
+    if (err) return res.status(500).json({ error: err.message });
     res.json({ id, description });
   });
 });
@@ -31,7 +35,7 @@ app.put('/api/projects/:id', (req, res) => {
   const { id } = req.params;
   const { description } = req.body;
   db.run(`UPDATE projects SET description = ? WHERE id = ?`, [description, id], function (err) {
-    if (err) return res.status(500).send(err);
+    if (err) return res.status(500).json({ error: err.message });
     res.send({ success: true });
   });
 });
@@ -40,32 +44,41 @@ app.put('/api/projects/:id', (req, res) => {
 app.delete('/api/projects/:id', (req, res) => {
   const { id } = req.params;
   db.run(`DELETE FROM projects WHERE id = ?`, [id], function (err) {
-    if (err) return res.status(500).send(err);
+    if (err) return res.status(500).json({ error: err.message });
+    db.run(`DELETE FROM tasks WHERE project_id = ?`, [id]);
     res.send({ success: true });
   });
 });
 
 // Get tasks for project
 app.get('/api/projects/:id/tasks', (req, res) => {
-  db.all('SELECT * FROM tasks WHERE project_id = ?', [req.params.id], (err, rows) => {
-    res.json(rows);
+  const { id } = req.params;
+  db.all('SELECT * FROM tasks WHERE project_id = ?', [id], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const tasks = rows.map(row => ({
+      ...row,
+      configuration: JSON.parse(row.configuration || '{}'),
+    }));
+    res.json(tasks);
   });
 });
 
 // Create a task
 app.post('/api/projects/:id/tasks', (req, res) => {
   const id = req.body.id || uuidv4();
-  const { title } = req.body;
-  const configuration = JSON.stringify({});
-  const task = { id, project_id: req.params.id, title, configuration: {} };
+  const { title, configuration } = req.body;
+  const configString = JSON.stringify(configuration || {});
+  const task = { id, project_id: req.params.id, title, configuration: configuration || {} };
 
   db.run(
     'INSERT INTO tasks (id, project_id, title, configuration) VALUES (?, ?, ?, ?)',
-    [id, req.params.id, title, configuration],
+    [id, req.params.id, title, configString],
     err => {
+      if (err) return res.status(500).json({ error: err.message });
       db.run('INSERT INTO events (id, type, task_id, payload) VALUES (?, ?, ?, ?)',
         [uuidv4(), 'create', id, JSON.stringify(task)]
       );
+      io.to(req.params.id).emit('task:create', task);
       res.json(task);
     }
   );
@@ -73,42 +86,47 @@ app.post('/api/projects/:id/tasks', (req, res) => {
 
 // Update a task
 app.put('/api/tasks/:id', (req, res) => {
+  const { id } = req.params;
   const { title, configuration } = req.body;
-  const configString = JSON.stringify(configuration || {});
 
-  db.run(
-    'UPDATE tasks SET title = ?, configuration = ? WHERE id = ?',
-    [title, configString, req.params.id],
-    err => {
-      db.run('INSERT INTO events (id, type, task_id, payload) VALUES (?, ?, ?, ?)',
-        [uuidv4(), 'update', req.params.id, JSON.stringify({ title, configuration })]
-      );
-      res.sendStatus(200);
-    }
-  );
-});
+  const query = `
+    UPDATE tasks
+    SET title = ?, configuration = ?
+    WHERE id = ?
+  `;
 
-// Delete a task
-app.delete('/api/tasks/:id', (req, res) => {
-  db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id], (err, task) => {
-    if (!task) return res.sendStatus(404);
-    db.run('DELETE FROM tasks WHERE id = ?', [req.params.id], err => {
-      db.run('INSERT INTO events (id, type, task_id, payload) VALUES (?, ?, ?, ?)',
-        [uuidv4(), 'delete', req.params.id, JSON.stringify(task)]
-      );
-      res.sendStatus(200);
+  db.run(query, [title, JSON.stringify(configuration), id], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    const updated = { id, title, configuration };
+    db.get('SELECT project_id FROM tasks WHERE id = ?', [id], (err2, row) => {
+      if (!err2 && row) {
+        io.to(row.project_id).emit('task:update', updated);
+      }
+      res.json(updated);
     });
   });
 });
 
-// Socket.IO real-time events
-io.on('connection', socket => {
-  socket.on('join', projectId => socket.join(projectId));
-  socket.on('leave', projectId => socket.leave(projectId));
+// Delete a task
+app.delete('/api/tasks/:id', (req, res) => {
+  const { id } = req.params;
+  db.get('SELECT project_id FROM tasks WHERE id = ?', [id], (err, row) => {
+    if (err || !row) return res.status(500).json({ error: 'Task not found' });
+    const project_id = row.project_id;
 
-  socket.on('task:create', task => io.to(task.project_id).emit('task:create', task));
-  socket.on('task:update', task => io.to(task.project_id).emit('task:update', task));
-  socket.on('task:delete', ({ id, project_id }) => io.to(project_id).emit('task:delete', id));
+    db.run('DELETE FROM tasks WHERE id = ?', [id], function (err2) {
+      if (err2) return res.status(500).json({ error: err2.message });
+      io.to(project_id).emit('task:delete', id);
+      res.send({ success: true });
+    });
+  });
 });
 
-server.listen(4000, () => console.log('Server listening on port 4000'));
+// Socket.io room join/leave
+io.on('connection', socket => {
+  socket.on('join', room => socket.join(room));
+  socket.on('leave', room => socket.leave(room));
+});
+
+const PORT = process.env.PORT || 4000;
+server.listen(PORT, () => console.log(`Server listening on http://localhost:${PORT}`));
