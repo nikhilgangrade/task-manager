@@ -34,6 +34,7 @@ const init = () => {
       id TEXT PRIMARY KEY,
       type TEXT,
       task_id TEXT,
+      project_id TEXT,
       payload TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
