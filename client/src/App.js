@@ -25,38 +25,63 @@ function App() {
   const [future, setFuture] = useState([]);
   const suppressSocket = useRef(false);
 
+  // Helper keys for localStorage per project
+  const historyKey = activeProject ? `taskHistory_${activeProject}` : null;
+  const futureKey = activeProject ? `taskFuture_${activeProject}` : null;
+
   const updateHistory = (newHistory, newFuture = future) => {
     setHistory(newHistory);
     setFuture(newFuture);
-    localStorage.setItem('taskHistory', JSON.stringify(newHistory));
-    localStorage.setItem('taskFuture', JSON.stringify(newFuture));
+    if (historyKey) localStorage.setItem(historyKey, JSON.stringify(newHistory));
+    if (futureKey) localStorage.setItem(futureKey, JSON.stringify(newFuture));
   };
 
+  // Load projects and restore activeProject from localStorage
   useEffect(() => {
     axios.get('http://localhost:4000/api/projects').then(res => {
       setProjects(res.data);
-      if (res.data.length && !activeProject) {
+
+      const savedActive = localStorage.getItem('activeProject');
+      if (savedActive && res.data.some(p => p.id === savedActive)) {
+        setActiveProject(savedActive);
+      } else if (res.data.length) {
         setActiveProject(res.data[0].id);
       }
     });
-
-    const savedHistory = localStorage.getItem('taskHistory');
-    const savedFuture = localStorage.getItem('taskFuture');
-    if (savedHistory) setHistory(JSON.parse(savedHistory));
-    if (savedFuture) setFuture(JSON.parse(savedFuture));
   }, []);
+
+  // Load history/future when activeProject changes
+  useEffect(() => {
+    if (!activeProject) {
+      setHistory([]);
+      setFuture([]);
+      return;
+    }
+    localStorage.setItem('activeProject', activeProject);
+
+    const savedHistory = localStorage.getItem(`taskHistory_${activeProject}`);
+    const savedFuture = localStorage.getItem(`taskFuture_${activeProject}`);
+
+    setHistory(savedHistory ? JSON.parse(savedHistory) : []);
+    setFuture(savedFuture ? JSON.parse(savedFuture) : []);
+  }, [activeProject]);
 
   useEffect(() => {
     if (!activeProject) return;
+
+    // Fetch tasks for active project
     axios.get(`http://localhost:4000/api/projects/${activeProject}/tasks`).then(res => setTasks(res.data));
     socket.emit('join', activeProject);
 
+    // Socket event listeners
     const onUpdate = task => {
       if (suppressSocket.current) {
         suppressSocket.current = false;
         return;
       }
-      setTasks(prev => prev.map(t => (t.id === task.id ? task : t)));
+      if (task.project_id === activeProject) {
+        setTasks(prev => prev.map(t => (t.id === task.id ? task : t)));
+      }
     };
 
     const onCreate = task => {
@@ -88,10 +113,15 @@ function App() {
       socket.off('task:create', onCreate);
       socket.off('task:delete', onDelete);
     };
-  }, [activeProject]);
+  }, [activeProject, history, future]);
 
   const createProject = async () => {
-    const newProjectDescription = `New Project ${projects.length + 1}`;
+    let i = 1;
+    while (projects.find(p => p.description === `New Project ${i}`)) {
+      i++;
+    }
+    const newProjectDescription = `New Project ${i}`;
+
     const res = await axios.post('http://localhost:4000/api/projects', { description: newProjectDescription });
     setProjects(prev => [...prev, res.data]);
   };
@@ -118,20 +148,29 @@ function App() {
     if (activeProject === id) {
       setActiveProject(null);
       setTasks([]);
+      setHistory([]);
+      setFuture([]);
     }
   };
 
   const createTask = async () => {
     if (!activeProject) return;
-    const res = await axios.post(`http://localhost:4000/api/projects/${activeProject}/tasks`, {
-      title: 'New Task',
-      configuration: { priority: '', description: '' },
-    });
-    const task = res.data;
-    suppressSocket.current = true;
-    setTasks(prev => [...prev, task]);
-    socket.emit('task:create', task);
-    updateHistory([...history, { type: 'create', task }]);
+
+    try {
+      const res = await axios.post(`http://localhost:4000/api/projects/${activeProject}/tasks`, {
+        title: 'New Task',
+        configuration: { priority: '', description: '' },
+      });
+      const task = res.data;
+
+      suppressSocket.current = true;
+
+      setTasks(prev => [...prev, task]);
+      socket.emit('task:create', task);
+      updateHistory([...history, { type: 'create', task }]);
+    } catch (err) {
+      console.error('Error creating task:', err);
+    }
   };
 
   const deleteTask = async task => {
@@ -143,7 +182,9 @@ function App() {
       updateHistory([...history, { type: 'delete', task: snapshot }]);
 
       await axios.delete(`http://localhost:4000/api/tasks/${task.id}`);
+
       suppressSocket.current = true;
+
       socket.emit('task:delete', { id: task.id, project_id: activeProject });
     } catch (err) {
       console.error('Error deleting task:', err);
@@ -168,12 +209,18 @@ function App() {
       },
     };
 
-    const { data: updated } = await axios.put(`http://localhost:4000/api/tasks/${editingTask.id}`, payload);
-    suppressSocket.current = true;
-    socket.emit('task:update', updated);
-    updateHistory([...history, { type: 'update', before: editingTask, after: updated }]);
-    setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)));
-    setEditingTask(null);
+    try {
+      const { data: updated } = await axios.put(`http://localhost:4000/api/tasks/${editingTask.id}`, payload);
+
+      suppressSocket.current = true;
+
+      socket.emit('task:update', updated);
+      updateHistory([...history, { type: 'update', before: editingTask, after: updated }]);
+      setTasks(prev => prev.map(t => (t.id === updated.id ? updated : t)));
+      setEditingTask(null);
+    } catch (err) {
+      console.error('Error saving edit:', err);
+    }
   };
 
   const undo = async () => {
@@ -347,7 +394,7 @@ function App() {
           <button className="action" onClick={createTask}>Add Task</button>
           <div className="mt-4 space-x-2">
             <button className="action" onClick={undo} disabled={!history.length}>Undo</button>
-            <button className="action" style={{ marginLeft: '8px' }} onClick={redo} disabled={!future.length}>Redo</button>
+            <button className="action" style={{ marginLeft: '10px' }} onClick={redo} disabled={!future.length}>Redo</button>
           </div>
         </div>
       )}
